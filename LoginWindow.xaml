@@ -1,0 +1,11 @@
+﻿<Window x:Class="DayOneWin.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Log in to Dropbox"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Height="500" Width="600">
+    <WebBrowser Name="Browser"
+        Navigated="WebBrowser_Navigated"
+        Navigating="WebBrowser_Navigating"/>
+</Window>
