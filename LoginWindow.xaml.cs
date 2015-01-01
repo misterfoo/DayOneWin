@@ -15,15 +15,14 @@
 		public LoginWindow()
 		{
 			InitializeComponent();
-			m_client = Dropbox.CreateClient();
 
 			// Navigate to the login page.
-			var authorizeUrl = m_client.BuildAuthorizeUrl(
+			Dropbox db = Dropbox.Connect( token: null, rootPath: null );
+			var authorizeUrl = db.RawClient.BuildAuthorizeUrl(
 				DropNet.Authenticators.OAuth2AuthorizationFlow.Token, RedirectUri.AbsoluteUri );
 			this.Browser.Navigate( authorizeUrl );
 		}
 
-		private DropNetClient m_client;
 		private static readonly Uri RedirectUri = new Uri( "https://www.dropbox.com/1/oauth2/redirect_receiver" );
 
 		public string UserToken { get; set; }

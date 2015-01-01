@@ -76,6 +76,22 @@
 		}
 
 		/// <summary>
+		/// Gets the leaf file name which should be used for this entry.
+		/// </summary>
+		public string DataFileName
+		{
+			get { return GetDataFileName( this.Uuid ); }
+		}
+
+		/// <summary>
+		/// Gets the leaf file name which should be used for the entry with the given id.
+		/// </summary>
+		public static string GetDataFileName( Guid uuid )
+		{
+			return GuidToString( uuid ) + StandardFileExtension;
+		}
+
+		/// <summary>
 		/// Loads a journal entry from obscured disk form.
 		/// </summary>
 		public static JournalEntry Load( string file )
@@ -101,10 +117,19 @@
 		{
 			if( !this.EverBeenSaved )
 				this.Uuid = Guid.NewGuid();
-			string file = Path.Combine( directory, GuidToString( this.Uuid ) + StandardFileExtension );
+			string file = Path.Combine( directory, this.DataFileName );
 			using( var writer = XmlWriter.Create( file, PropertyList.XmlWriterSettings ) )
 				PropertyList.Write( writer, ToPlist() );
 			this.IsDirty = false;
+		}
+
+		/// <summary>
+		/// Gets the byte representation of a journal entry, suitable for upload to Dropbox.
+		/// This undoes any obfuscation/compression/etc. which applies to the on-disk file.
+		/// </summary>
+		public static byte[] GetCleanBytes( string file )
+		{
+			throw new NotImplementedException();
 		}
 
 		public const string StandardFileExtension = ".doentry";

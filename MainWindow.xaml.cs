@@ -18,6 +18,7 @@
 			LoginButtonText = (string)this.BtnLogin.Content;
 
 			m_model = new MainViewModel( this );
+			m_model.ErrorOccurred += model_ErrorOccurred;
 			this.DataContext = m_model;
 			m_model.LogOut();
 
@@ -125,6 +126,11 @@
 		{
 			this.Dispatcher.Invoke( CommitEdits );
 			m_model.AutoSave();
+		}
+
+		private void model_ErrorOccurred( object sender, string error )
+		{
+			MessageBox.Show( this, error, this.Title, MessageBoxButton.OK, MessageBoxImage.Error );
 		}
 	}
 }

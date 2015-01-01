@@ -9,6 +9,8 @@
 	using System.Windows;
 	using System.Windows.Threading;
 	using DropNet;
+	using DropNet.Models;
+	using Newtonsoft.Json;
 
 	/// <summary>
 	/// ViewModel for the main application window.
@@ -17,19 +19,16 @@
 	{
 		public MainViewModel( Window view )
 		{
-			SetStatus( "Idle" );
+			SetMainStatus( string.Empty );
 			this.DropboxRootPath = "/Apps/Day One/Journal.dayone/entries";
 			this.AllEntries = new List<JournalEntry>();
 
-			m_offlineMode = true;
-			m_offlineStore = Path.Combine( App.StorageFolder, "entries" );
-			Directory.CreateDirectory( m_offlineStore );
+			m_offlineMode = false;
 			m_view = view;
 		}
 
 		private readonly Window m_view;
 		private bool m_offlineMode;
-		private string m_offlineStore;
 
 		/// <summary>
 		/// The root path we should use when connecting to Dropbox.
@@ -49,12 +48,12 @@
 			get { return (m_dropbox != null); }
 		}
 
-		private void SetConnection( DropNetClient client )
+		private void SetConnection( Dropbox db )
 		{
-			m_dropbox = client;
+			m_dropbox = db;
 			OnPropertyChanged( "IsConnected" );
 		}
-		private DropNetClient m_dropbox;
+		private Dropbox m_dropbox;
 
 		/// <summary>
 		/// Indicates whether we have an active journal entry.
@@ -129,14 +128,29 @@
 		}
 
 		/// <summary>
-		/// The status bar message.
+		/// The main status bar message.
 		/// </summary>
-		public string StatusMessage
+		public string MainStatusMessage
 		{
-			get { return m_statusMsg; }
-			set { SetProperty( ref m_statusMsg, value ); }
+			get { return m_mainStatus; }
+			set { SetProperty( ref m_mainStatus, value ); }
 		}
-		private string m_statusMsg;
+		private string m_mainStatus;
+
+		/// <summary>
+		/// The Dropbox status bar message.
+		/// </summary>
+		public string DropboxStatusMessage
+		{
+			get { return m_dropboxStatus; }
+			set { SetProperty( ref m_dropboxStatus, value ); }
+		}
+		private string m_dropboxStatus;
+
+		/// <summary>
+		/// Raised when a substantial error occurs that the user should probably know about.
+		/// </summary>
+		public event EventHandler<string> ErrorOccurred;
 
 		/// <summary>
 		/// Logs the user in to Dropbox.
@@ -145,7 +159,7 @@
 		{
 			if( m_offlineMode )
 			{
-				SetConnection( Dropbox.CreateClient() );
+				SetConnection( Dropbox.Connect( token: null, rootPath: null ) );
 			}
 			else
 			{
@@ -154,11 +168,12 @@
 				window.ShowDialog();
 				if( window.UserToken == null )
 				{
-					SetStatus( "Login failed. :(" );
+					NotifyError( "Login failed", "The login attempt failed or was canceled." );
 					return;
 				}
 
-				SetConnection( Dropbox.CreateClient( window.UserToken ) );
+				SetDropboxStatus( "Connected" );
+				SetConnection( Dropbox.Connect( window.UserToken, this.DropboxRootPath ) );
 			}
 
 			RefreshEntryList();
@@ -171,10 +186,10 @@
 		{
 			if( !m_offlineMode && this.IsConnected )
 			{
-				var result = m_dropbox.DisableAccessToken();
+				var result = m_dropbox.RawClient.DisableAccessToken();
 				if( result.StatusCode != System.Net.HttpStatusCode.OK )
 				{
-					SetStatus( result.ToString() );
+					SetMainStatus( result.ToString() );
 					return;
 				}
 
@@ -184,7 +199,6 @@
 			this.AllEntries.Clear();
 			this.ActiveEntry = null;
 			SetConnection( null );
-			SetStatus( "Logged out" );
 		}
 
 		/// <summary>
@@ -206,12 +220,12 @@
 				if( dirtyList.Length == 0 )
 					return;
 
-				SetStatus( "Saving..." );
+				SetMainStatus( "Saving..." );
 
 				if( m_offlineMode )
 				{
 					foreach( JournalEntry entry in dirtyList )
-						entry.Save( m_offlineStore );
+						entry.Save( App.OfflineEntryStore );
 				}
 				else
 				{
@@ -222,7 +236,7 @@
 
 				// A short delay so the user can see the "saving..." status.
 				System.Threading.Thread.Sleep( TimeSpan.FromMilliseconds( 250 ) );
-				SetStatus( "Saved." );
+				SetMainStatus( "Saved." );
 			}
 			finally
 			{
@@ -232,7 +246,7 @@
 		private bool m_saving;
 
 		/// <summary>
-		/// Starts an asynchronous load of the journal entry list.
+		/// Starts an asynchronous load of the journal entryId list.
 		/// </summary>
 		public void RefreshEntryList()
 		{
@@ -242,7 +256,7 @@
 
 				// Load old entries off disk.
 				List<JournalEntry> entries = new List<JournalEntry>();
-				foreach( string entry in Directory.EnumerateFiles( m_offlineStore,
+				foreach( string entry in Directory.EnumerateFiles( App.OfflineEntryStore,
 					"*" + JournalEntry.StandardFileExtension ) )
 				{
 					entries.Add( JournalEntry.Load( entry ) );
@@ -255,10 +269,10 @@
 			}
 			else
 			{
-				SetStatus( "Loading entries..." );
-				m_dropbox.GetMetaDataAsync( this.DropboxRootPath,
+				SetMainStatus( "Loading entries..." );
+				m_dropbox.RawClient.GetMetaDataAsync( this.DropboxRootPath,
 					response => LoadEntries( response.Contents ),
-					error => SetStatus( error.ToString() ) );
+					error => SetMainStatus( error.ToString() ) );
 			}
 		}
 
@@ -308,19 +322,26 @@
 
 		private void LoadEntries( List<DropNet.Models.MetaData> dirContents )
 		{
+			if( dirContents.Count == 0 )
+			{
+				NotifyError( "No journal entries", "Couldn't find any journal entries," +
+					" because none exist or the Dropbox storage path is wrong." );
+				return;
+			}
+
 			var entries = dirContents.Where( x => !x.Is_Dir ).ToList();
 			if( entries.Count == 0 )
 				return;
 			var latest = entries.OrderByDescending( x => x.ModifiedDate ).First();
 			LoadEntry( latest );
-			SetStatus( "Loaded!" );
+			SetMainStatus( "Loaded!" );
 		}
 
 		private void LoadEntry( DropNet.Models.MetaData md )
 		{
-			m_dropbox.GetFileAsync( md.Path,
-				response => FinishLoadEntry( response ),
-				error => SetStatus( "Error loading entry: " + error.Message ) );
+			m_dropbox.RawClient.GetFileAsync( md.Path,
+				response => FinishLoadEntry( md, response ),
+				error => NotifyError( "Error loading entry", error.Message ) );
 		}
 
 		private void FinishLoadEntries( List<JournalEntry> entries )
@@ -330,17 +351,22 @@
 			this.ActiveEntry = this.AllEntries.Last();
 		}
 
-		private void FinishLoadEntry( RestSharp.IRestResponse loaded )
+		private void FinishLoadEntry( MetaData lastKnownMetadata, RestSharp.IRestResponse loaded )
 		{
 			try
 			{
+				var mdRaw = loaded.Headers.FirstOrDefault( x => x.Name == "x-dropbox-metadata" );
+				MetaData md = (mdRaw != null) ?
+					JsonConvert.DeserializeObject<MetaData>( (string)mdRaw.Value ) :
+					lastKnownMetadata;
+
 				JournalEntry entry = JournalEntry.Load( loaded.RawBytes );
 				this.ActiveEntry = entry;
 			}
 			catch( Exception ex )
 			{
 				this.ActiveEntry = null;
-				SetStatus( ex.Message );
+				NotifyError( "Error loading journal entry", ex.Message );
 			}
 		}
 
@@ -363,20 +389,36 @@
 		/// </summary>
 		private void DoBrowserLogout()
 		{
-			SetStatus( "Logging out..." );
+			SetMainStatus( "Logging out..." );
 			var wb = new System.Windows.Controls.WebBrowser();
 			wb.Navigating += ( s, a ) => Debug.WriteLine( "Navigating: " + a.Uri );
 			wb.Navigated += ( s, a ) =>
 				{
-					SetStatus( "Logged out." );
+					SetMainStatus();
+					SetDropboxStatus( "Disconnected" );
 					Application.Current.Dispatcher.BeginInvoke( new Action( wb.Dispose ) );
 				};
 			wb.Navigate( "https://www.dropbox.com/logout" );
 		}
 
-		private void SetStatus( string msg )
+		private void NotifyError( string summary, string details )
 		{
-			this.StatusMessage = msg;
+			SetMainStatus( summary );
+			var eh = this.ErrorOccurred;
+			if( eh != null )
+				eh( this, summary + ": " + details );
+		}
+
+		private void SetMainStatus( string msg = null )
+		{
+			this.MainStatusMessage = msg ?? string.Empty;
+		}
+
+		private void SetDropboxStatus( string msg )
+		{
+			if( !string.IsNullOrEmpty( msg ) )
+				msg = "Dropbox: " + msg;
+			this.DropboxStatusMessage = msg;
 		}
 
 		/// <summary>
@@ -389,7 +431,7 @@
 				return new MainViewModel( null )
 				{
 					ActiveEntry = JournalEntry.SampleEntry,
-					StatusMessage = "Stuff!"
+					MainStatusMessage = "Stuff!"
 				};
 			}
 		}
