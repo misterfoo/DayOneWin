@@ -111,6 +111,8 @@
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
     </None>
     <AppDesigner Include="Properties\" />
+    <None Include="readme.md" />
+    <None Include="todo.md" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
