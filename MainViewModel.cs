@@ -3,9 +3,11 @@
 	using System;
 	using System.Collections.Generic;
 	using System.Collections.ObjectModel;
+	using System.Diagnostics;
 	using System.IO;
 	using System.Linq;
 	using System.Windows;
+	using System.Windows.Threading;
 	using DropNet;
 
 	/// <summary>
@@ -169,18 +171,17 @@
 		{
 			if( !m_offlineMode && this.IsConnected )
 			{
-				string token = m_dropbox.UserLogin.Token;
 				var result = m_dropbox.DisableAccessToken();
 				if( result.StatusCode != System.Net.HttpStatusCode.OK )
-					SetStatus( result.ToString() );
-				else
 				{
-					result = m_dropbox.Logout( token );
-					if( result.StatusCode != System.Net.HttpStatusCode.OK )
-						SetStatus( result.ToString() );
+					SetStatus( result.ToString() );
+					return;
 				}
+
+				DoBrowserLogout();
 			}
 
+			this.AllEntries.Clear();
 			this.ActiveEntry = null;
 			SetConnection( null );
 			SetStatus( "Logged out" );
@@ -355,6 +356,22 @@
 		private void NavInfoStringChanged()
 		{
 			OnPropertyChanged( "NavigationInfoString" );
+		}
+
+		/// <summary>
+		/// Logs the user out of Dropbox so they will be required to enter credentials next time.
+		/// </summary>
+		private void DoBrowserLogout()
+		{
+			SetStatus( "Logging out..." );
+			var wb = new System.Windows.Controls.WebBrowser();
+			wb.Navigating += ( s, a ) => Debug.WriteLine( "Navigating: " + a.Uri );
+			wb.Navigated += ( s, a ) =>
+				{
+					SetStatus( "Logged out." );
+					Application.Current.Dispatcher.BeginInvoke( new Action( wb.Dispose ) );
+				};
+			wb.Navigate( "https://www.dropbox.com/logout" );
 		}
 
 		private void SetStatus( string msg )
