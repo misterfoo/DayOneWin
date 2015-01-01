@@ -4,6 +4,7 @@
 	using System.Collections.Generic;
 	using System.Collections.ObjectModel;
 	using System.IO;
+	using System.IO.Compression;
 	using System.Linq;
 	using System.Xml;
 
@@ -80,7 +81,9 @@
 		/// </summary>
 		public static JournalEntry Load( string file )
 		{
-			using( var reader = XmlReader.Create( file, PropertyList.XmlReaderSettings ) )
+			using( var raw = File.OpenRead( file ) )
+			using( var decompress = new GZipStream( raw, CompressionMode.Decompress ) )
+			using( var reader = XmlReader.Create( decompress, PropertyList.XmlReaderSettings ) )
 				return FromPList( (PropertyList.PList)PropertyList.Read( reader ) );
 		}
 
@@ -102,7 +105,9 @@
 			if( !this.EverBeenSaved )
 				this.Uuid = Guid.NewGuid();
 			string file = Path.Combine( directory, GuidToString( this.Uuid ) + StandardFileExtension );
-			using( var writer = XmlWriter.Create( file, PropertyList.XmlWriterSettings ) )
+			using( var raw = File.OpenWrite( file ) )
+			using( var compress = new GZipStream( raw, CompressionMode.Compress ) )
+			using( var writer = XmlWriter.Create( compress, PropertyList.XmlWriterSettings ) )
 				PropertyList.Write( writer, ToPlist() );
 			this.IsDirty = false;
 		}
