@@ -20,7 +20,6 @@
 			// Navigate to the login page.
 			var authorizeUrl = m_client.BuildAuthorizeUrl(
 				DropNet.Authenticators.OAuth2AuthorizationFlow.Token, RedirectUri.AbsoluteUri );
-			authorizeUrl = authorizeUrl.Replace( "api.dropbox.com", "www.dropbox.com" );
 			this.Browser.Navigate( authorizeUrl );
 		}
 
