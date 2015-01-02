@@ -20,7 +20,8 @@
 		public MainViewModel( Window view )
 		{
 			SetMainStatus( string.Empty );
-			this.DropboxRootPath = "/Apps/Day One/Journal.dayone/entries";
+//			this.DropboxRootPath = "/Apps/Day One/Journal.dayone/entries";
+			this.DropboxRootPath = "/Scratch/JournalEntries";
 			this.AllEntries = new List<JournalEntry>();
 
 			m_offlineMode = false;

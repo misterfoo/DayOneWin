@@ -3,6 +3,7 @@
 	using System;
 	using System.Collections.Generic;
 	using System.IO;
+	using System.Net;
 	using System.Threading.Tasks;
 	using DropNet;
 	using DropNet.Models;
@@ -29,7 +30,7 @@
 		/// </summary>
 		public static Dropbox Connect( string token, string rootPath )
 		{
-			if( !rootPath.EndsWith( "/" ) )
+			if( !string.IsNullOrEmpty( rootPath ) && !rootPath.EndsWith( "/" ) )
 				rootPath += "/";
 
 			Dropbox d = new Dropbox();
@@ -45,30 +46,11 @@
 		}
 
 		private string m_rootPath;
-		private readonly object m_fsLock = new object();
 
 		/// <summary>
 		/// The raw DropNet client object, for direct calls.
 		/// </summary>
 		public DropNetClient RawClient { get; private set; }
-
-		public enum SyncResultCode
-		{
-			Success,
-			Collision
-		}
-
-		public class SyncResult
-		{
-			public SyncResult( Guid entryId, SyncResultCode result )
-			{
-				this.EntryId = entryId;
-				this.Result = result;
-			}
-
-			public Guid EntryId { get; private set; }
-			public SyncResultCode Result { get; private set; }
-		}
 
 		public List<Task<SyncResult>> SyncFromServer()
 		{
@@ -81,40 +63,121 @@
 			throw new NotImplementedException();
 		}
 
+		/// <summary>
+		/// Asynchronously pushes the latest content for the given journal entry up
+		/// to the Dropbox server.
+		/// </summary>
 		public Task<SyncResult> PushToServerAsync( Guid entryId )
 		{
 			return Task.Run<SyncResult>( () => PushToServer( entryId ) );
 		}
 
-		private SyncResult PushToServer( Guid entryId )
+		/// <summary>
+		/// The types of results we can have for a sync.
+		/// </summary>
+		public enum SyncResultCode
 		{
-			MetaData mdLastKnown = GetLocalMetadata( entryId );
-			MetaData mdCurrent = this.RawClient.GetMetaData( GetDropboxPath( entryId ) );
-			if( mdCurrent != null && mdCurrent.ModifiedDate > mdLastKnown.ModifiedDate )
-				return new SyncResult( entryId, SyncResultCode.Collision );
-
-			byte[] rawData;
-			lock( m_fsLock )
-				rawData = JournalEntry.GetCleanBytes( GetLocalPath( entryId ) );
-
-			MetaData mdNew = this.RawClient.UploadFile(
-				m_rootPath, JournalEntry.GetDataFileName( entryId ), rawData,
-				overwrite: true, parentRevision: mdLastKnown.Rev );
-
-			throw new NotImplementedException();
+			Success,
+			Collision,
+			Error
 		}
 
-		private MetaData GetLocalMetadata( Guid entryId )
+		/// <summary>
+		/// The result of a sync operation on a journal entry.
+		/// </summary>
+		public class SyncResult
 		{
-			string file = GetLocalMetadataPath( entryId );
+			public SyncResult( Guid entryId, SyncResultCode result )
+			{
+				this.EntryId = entryId;
+				this.Result = result;
+			}
+
+			public SyncResult( Guid entryId, HttpStatusCode code )
+			{
+				this.EntryId = entryId;
+				this.Result = (code == HttpStatusCode.Conflict) ?
+					SyncResultCode.Collision : SyncResultCode.Error;
+			}
+
+			public Guid EntryId { get; private set; }
+			public SyncResultCode Result { get; private set; }
+		}
+
+		private SyncResult PushToServer( Guid entryId )
+		{
+			MetaData mdLastKnown = ReadServerMetadata( entryId );
+
+			byte[] rawData;
+			DateTime lastWrite;
+			JournalEntry.GetCleanBytes( GetLocalPath( entryId ), out rawData, out lastWrite );
+
+			var result = this.RawClient.UploadFile(
+				m_rootPath, JournalEntry.GetDataFileName( entryId ), rawData,
+				overwrite: true, parentRevision: mdLastKnown.Rev );
+			if( result.StatusCode != HttpStatusCode.OK )
+				return new SyncResult( entryId, result.StatusCode );
+
+			WriteLocalSyncInfo( entryId, new LocalSyncInfo { LastUploadedVersion = lastWrite } );
+			WriteServerMetadata( entryId, result.Data );
+
+			return new SyncResult( entryId, SyncResultCode.Success );
+		}
+
+		/// <summary>
+		/// Gets the last known server metadata for the given journal entry
+		/// </summary>
+		private MetaData ReadServerMetadata( Guid entryId )
+		{
+			string file = GetServerMetadataPath( entryId );
 			if( !File.Exists( file ) )
 				return null;
 			return JsonConvert.DeserializeObject<MetaData>( File.ReadAllText( file ) );
 		}
 
-		private string GetLocalMetadataPath( Guid entryId )
+		/// <summary>
+		/// Updates the last known server metadata for the given journal entry
+		/// </summary>
+		private void WriteServerMetadata( Guid entryId, MetaData metaData )
 		{
-			return GetLocalPath( entryId ) + ".metadata";
+			string file = GetServerMetadataPath( entryId );
+			File.WriteAllText( file, JsonConvert.SerializeObject( metaData ) );
+		}
+
+		/// <summary>
+		/// Gets the file which stores the last known Dropbox metadata for the given journal entry
+		/// </summary>
+		private string GetServerMetadataPath( Guid entryId )
+		{
+			return GetLocalPath( entryId ) + ".servermd";
+		}
+
+		/// <summary>
+		/// Gets the local sync info for the given journal entry
+		/// </summary>
+		private LocalSyncInfo ReadLocalSyncInfo( Guid entryId )
+		{
+			string file = GetLocalSyncInfoPath( entryId );
+			if( !File.Exists( file ) )
+				return null;
+			return JsonConvert.DeserializeObject<LocalSyncInfo>( File.ReadAllText( file ) );
+		}
+
+		/// <summary>
+		/// Updates the local sync info for the given journal entry
+		/// </summary>
+		private void WriteLocalSyncInfo( Guid entryId, LocalSyncInfo info )
+		{
+			string file = GetLocalSyncInfoPath( entryId );
+			File.WriteAllText( file, JsonConvert.SerializeObject( info ) );
+		}
+
+		/// <summary>
+		/// Gets the file which stores the local sync info for the given journal entry
+		/// </summary>
+		private string GetLocalSyncInfoPath( Guid entryId )
+		{
+			return GetLocalPath( entryId ) + ".localinfo";
 		}
 
 		private string GetLocalPath( Guid entryId )
@@ -134,6 +197,14 @@
 				return;
 			AppKey = lines[0];
 			AppSecret = lines[1];
+		}
+
+		private class LocalSyncInfo
+		{
+			/// <summary>
+			/// The LastWriteTime of the last version we uploaded to the server
+			/// </summary>
+			public DateTime LastUploadedVersion { get; set; }
 		}
 	}
 }

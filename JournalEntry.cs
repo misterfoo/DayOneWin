@@ -27,6 +27,12 @@
 		private string m_timeZone;
 
 		/// <summary>
+		/// Provides exclusion when reading and writing journal entries, so we don't have to
+		/// worry about collisions between readers and writers.
+		/// </summary>
+		private static readonly object m_fsLock = new object();
+
+		/// <summary>
 		/// The header string for the selected entry.
 		/// </summary>
 		public string HeaderString
@@ -97,10 +103,13 @@
 		/// </summary>
 		public static JournalEntry Load( string file )
 		{
-			using( var raw = File.OpenRead( file ) )
-			using( var decompress = new GZipStream( raw, CompressionMode.Decompress ) )
-			using( var reader = XmlReader.Create( decompress, PropertyList.XmlReaderSettings ) )
-				return FromPList( (PropertyList.PList)PropertyList.Read( reader ) );
+			lock( m_fsLock )
+			{
+				using( var raw = File.OpenRead( file ) )
+				using( var decompress = new GZipStream( raw, CompressionMode.Decompress ) )
+				using( var reader = XmlReader.Create( decompress, PropertyList.XmlReaderSettings ) )
+					return FromPList( (PropertyList.PList)PropertyList.Read( reader ) );
+			}
 		}
 
 		/// <summary>
@@ -121,20 +130,34 @@
 			if( !this.EverBeenSaved )
 				this.Uuid = Guid.NewGuid();
 			string file = Path.Combine( directory, this.DataFileName );
-			using( var raw = File.OpenWrite( file ) )
-			using( var compress = new GZipStream( raw, CompressionMode.Compress ) )
-			using( var writer = XmlWriter.Create( compress, PropertyList.XmlWriterSettings ) )
-				PropertyList.Write( writer, ToPlist() );
+			lock( m_fsLock )
+			{
+				using( var raw = File.OpenWrite( file ) )
+				using( var compress = new GZipStream( raw, CompressionMode.Compress ) )
+				using( var writer = XmlWriter.Create( compress, PropertyList.XmlWriterSettings ) )
+					PropertyList.Write( writer, ToPlist() );
+			}
 			this.IsDirty = false;
 		}
 
 		/// <summary>
 		/// Gets the byte representation of a journal entry, suitable for upload to Dropbox.
 		/// This undoes any obfuscation/compression/etc. which applies to the on-disk file.
+		/// The lastWriteTime value describes the version of the file which was read.
 		/// </summary>
-		public static byte[] GetCleanBytes( string file )
+		public static void GetCleanBytes( string file, out byte[] bytes, out DateTime lastWriteTime )
 		{
-			throw new NotImplementedException();
+			lock( m_fsLock )
+			{
+				lastWriteTime = File.GetLastWriteTimeUtc( file );
+				using( var raw = File.OpenRead( file ) )
+				using( var decompress = new GZipStream( raw, CompressionMode.Decompress ) )
+				using( var temp = new MemoryStream() )
+				{
+					decompress.CopyTo( temp );
+					bytes = temp.ToArray();
+				}
+			}
 		}
 
 		public const string StandardFileExtension = ".doentry";
