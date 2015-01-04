@@ -3,6 +3,7 @@
 	using System;
 	using System.Collections.Generic;
 	using System.IO;
+	using System.Linq;
 	using System.Net;
 	using System.Threading.Tasks;
 	using DropNet;
@@ -52,76 +53,163 @@
 		/// </summary>
 		public DropNetClient RawClient { get; private set; }
 
-		public List<Task<SyncResult>> SyncFromServer()
+		/// <summary>
+		/// The types of progress messages we can generate.
+		/// </summary>
+		public enum ProgressType
 		{
-			// retrieve metadata listing from server
-			// determine adds/changes/deletes based on local metadata
-			// foreach file
-			//	download file
-			//	update status information
-			//	yield path to new/updated file
-			throw new NotImplementedException();
+			Info,
+			Complete,
+			Error,
+		}
+
+		/// <summary>
+		/// Callback function for reporting progress when talking to Dropbox.
+		/// </summary>
+		/// <param name="type">The type of message being reported.</param>
+		/// <param name="message">The message content.</param>
+		/// <returns>True to keep going, false to cancel.</returns>
+		public delegate bool SyncProgressDelegate( ProgressType type, string message,
+			int stepNum = 0, int stepCount = 0 );
+
+		/// <summary>
+		/// Reloads the journal entry list from the server, storing downloaded entries on disk.
+		/// </summary>
+		public Task RefreshFromServerAsync( SyncProgressDelegate progress )
+		{
+			return Task.Run( () => RefreshFromServer( progress ) );
 		}
 
 		/// <summary>
 		/// Asynchronously pushes the latest content for the given journal entry up
 		/// to the Dropbox server.
 		/// </summary>
-		public Task<SyncResult> PushToServerAsync( Guid entryId )
+		public Task PushToServerAsync( SyncProgressDelegate progress, Guid entryId )
 		{
-			return Task.Run<SyncResult>( () => PushToServer( entryId ) );
+			return Task.Run( () => PushToServer( progress, entryId ) );
 		}
 
-		/// <summary>
-		/// The types of results we can have for a sync.
-		/// </summary>
-		public enum SyncResultCode
+		private void RefreshFromServer( SyncProgressDelegate progress )
 		{
-			Success,
-			Collision,
-			Error
-		}
+			if( !progress( ProgressType.Info, "Talking to Dropbox", stepNum: 1, stepCount: 100 ) )
+				return;
 
-		/// <summary>
-		/// The result of a sync operation on a journal entry.
-		/// </summary>
-		public class SyncResult
-		{
-			public SyncResult( Guid entryId, SyncResultCode result )
+			MetaData md;
+			try
 			{
-				this.EntryId = entryId;
-				this.Result = result;
+				md = this.RawClient.GetMetaData( m_rootPath );
+			}
+			catch( DropNet.Exceptions.DropboxException ex )
+			{
+				progress( ProgressType.Error, ex.Message );
+				return;
 			}
 
-			public SyncResult( Guid entryId, HttpStatusCode code )
+			// Look for any new entries we don't have already, or ones which have changed.
+			if( !progress( ProgressType.Info, "Checking for new content", stepNum: 2, stepCount: 100 ) )
+				return;
+			var changed = new List<Guid>();
+			foreach( MetaData mdCurrent in md.Contents )
 			{
-				this.EntryId = entryId;
-				this.Result = (code == HttpStatusCode.Conflict) ?
-					SyncResultCode.Collision : SyncResultCode.Error;
+				Guid id = GetEntryIdFromFileName( mdCurrent.Name );
+				if( id == Guid.Empty )
+					continue;
+
+				// Is this a totally new entry?
+				string localFile = GetLocalEntryFilePath( id );
+				string serverMdFile = GetServerMetadataPath( id );
+				if( !File.Exists( localFile ) || !File.Exists( serverMdFile	) )
+				{
+					changed.Add( id );
+					continue;
+				}
+
+				// Did it change from what we last knew about it?
+				MetaData mdLastKnown = ReadServerMetadata( id );
+				if( mdLastKnown.ModifiedDate != mdCurrent.ModifiedDate )
+				{
+					changed.Add( id );
+					continue;
+				}
+
+				// We already have the latest copy of this entry.
 			}
 
-			public Guid EntryId { get; private set; }
-			public SyncResultCode Result { get; private set; }
+			// Download all the new/changed entries.
+			int step = 0;
+			foreach( Guid id in changed )
+			{
+				if( !progress( ProgressType.Info, "Downloading entry content", ++step, changed.Count ) )
+					return;
+				PullFromServer( progress, id );
+			}
 		}
 
-		private SyncResult PushToServer( Guid entryId )
+		private void PullFromServer( SyncProgressDelegate progress, Guid entryId )
+		{
+			try
+			{
+				// Download the entry content to memory.
+				var result = this.RawClient.GetFile( GetDropboxEntryFilePath( entryId ) );
+				if( result.StatusCode != HttpStatusCode.OK )
+				{
+					ReportError( progress, "Upload failed", result );
+					return;
+				}
+
+				// Find the metadata for the content we actually got.
+				var mdRaw = result.Headers.FirstOrDefault( x => x.Name == "x-dropbox-metadata" );
+				if( mdRaw == null )
+				{
+					progress( ProgressType.Error, "Got unexpected results from Dropbox API (no metadata for downloaded file)" );
+					return;
+				}
+
+				// Write the journal entry to the local store.
+				JournalEntry entry = JournalEntry.Load( result.RawBytes );
+				entry.Save( App.OfflineEntryStore );
+
+				// Record that the file on disk matches Dropbox and doesn't need to be uploaded.
+				DateTime lastWrite = File.GetLastWriteTimeUtc( GetLocalEntryFilePath( entryId ) );
+				WriteLocalSyncInfo( entryId, new LocalSyncInfo { LastUploadedVersion = lastWrite } );
+
+				// Write the matching server metadata.
+				MetaData mdLatest = JsonConvert.DeserializeObject<MetaData>( (string)mdRaw.Value );
+				WriteServerMetadata( entryId, mdLatest );
+			}
+			catch( Exception ex )
+			{
+				progress( ProgressType.Error, ex.Message );
+			}
+		}
+
+		private void PushToServer( SyncProgressDelegate progress, Guid entryId )
 		{
 			MetaData mdLastKnown = ReadServerMetadata( entryId );
 
 			byte[] rawData;
 			DateTime lastWrite;
-			JournalEntry.GetCleanBytes( GetLocalPath( entryId ), out rawData, out lastWrite );
+			JournalEntry.GetCleanBytes( GetLocalEntryFilePath( entryId ), out rawData, out lastWrite );
 
 			var result = this.RawClient.UploadFile(
 				m_rootPath, JournalEntry.GetDataFileName( entryId ), rawData,
 				overwrite: true, parentRevision: mdLastKnown.Rev );
 			if( result.StatusCode != HttpStatusCode.OK )
-				return new SyncResult( entryId, result.StatusCode );
+			{
+				ReportError( progress, "Upload failed", result );
+				return;
+			}
 
 			WriteLocalSyncInfo( entryId, new LocalSyncInfo { LastUploadedVersion = lastWrite } );
 			WriteServerMetadata( entryId, result.Data );
 
-			return new SyncResult( entryId, SyncResultCode.Success );
+			progress( ProgressType.Complete, "Upload complete" );
+		}
+
+		private static void ReportError( SyncProgressDelegate progress, string context, RestSharp.IRestResponse result )
+		{
+			string msg = string.Format( "{0}: {1}", context, result.StatusCode );
+			progress( ProgressType.Error, msg );
 		}
 
 		/// <summary>
@@ -149,7 +237,7 @@
 		/// </summary>
 		private string GetServerMetadataPath( Guid entryId )
 		{
-			return GetLocalPath( entryId ) + ".servermd";
+			return GetLocalEntryFilePath( entryId ) + ".servermd";
 		}
 
 		/// <summary>
@@ -177,17 +265,26 @@
 		/// </summary>
 		private string GetLocalSyncInfoPath( Guid entryId )
 		{
-			return GetLocalPath( entryId ) + ".localinfo";
+			return GetLocalEntryFilePath( entryId ) + ".localinfo";
 		}
 
-		private string GetLocalPath( Guid entryId )
+		private string GetLocalEntryFilePath( Guid entryId )
 		{
 			return Path.Combine( App.OfflineEntryStore, JournalEntry.GetDataFileName( entryId ) );
 		}
 
-		private string GetDropboxPath( Guid entryId )
+		private string GetDropboxEntryFilePath( Guid entryId )
 		{
 			return m_rootPath + JournalEntry.GetDataFileName( entryId );
+		}
+
+		private Guid GetEntryIdFromFileName( string file )
+		{
+			string name = Path.GetFileNameWithoutExtension( file );
+			Guid id;
+			if( !Guid.TryParse( name, out id ) )
+				return Guid.Empty;
+			return id;
 		}
 
 		private static void LoadApiKeys()
