@@ -6,6 +6,7 @@
 	using System.IO;
 	using System.IO.Compression;
 	using System.Linq;
+	using System.Text;
 	using System.Xml;
 
 	/// <summary>
@@ -99,6 +100,18 @@
 		}
 
 		/// <summary>
+		/// Locates and loads all of the cached journal entries from disk.
+		/// </summary>
+		public static IEnumerable<JournalEntry> LoadAllCachedEntries()
+		{
+			foreach( string file in Directory.EnumerateFiles( App.OfflineEntryStore,
+				"*" + StandardFileExtension ) )
+			{
+				yield return Load( file );
+			}
+		}
+
+		/// <summary>
 		/// Loads a journal entry from obscured disk form.
 		/// </summary>
 		public static JournalEntry Load( string file )
@@ -117,7 +130,7 @@
 		/// </summary>
 		public static JournalEntry Load( byte[] bytes )
 		{
-			using( var stream = new System.IO.MemoryStream( bytes ) )
+			using( var stream = new MemoryStream( bytes ) )
 			using( var reader = XmlReader.Create( stream, PropertyList.XmlReaderSettings ) )
 				return FromPList( (PropertyList.PList)PropertyList.Read( reader ) );
 		}

@@ -130,6 +130,12 @@
 
 		private void model_ErrorOccurred( object sender, string error )
 		{
+			if( !this.Dispatcher.CheckAccess() )
+			{
+				this.Dispatcher.BeginInvoke( new Action( () => model_ErrorOccurred( sender, error ) ) );
+				return;
+			}
+
 			MessageBox.Show( this, error, this.Title, MessageBoxButton.OK, MessageBoxImage.Error );
 		}
 	}

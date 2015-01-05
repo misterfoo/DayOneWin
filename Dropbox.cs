@@ -91,7 +91,7 @@
 
 		private void RefreshFromServer( SyncProgressDelegate progress )
 		{
-			if( !progress( ProgressType.Info, "Talking to Dropbox", stepNum: 1, stepCount: 100 ) )
+			if( !progress( ProgressType.Info, "Connecting..." ) )
 				return;
 
 			MetaData md;
@@ -106,7 +106,7 @@
 			}
 
 			// Look for any new entries we don't have already, or ones which have changed.
-			if( !progress( ProgressType.Info, "Checking for new content", stepNum: 2, stepCount: 100 ) )
+			if( !progress( ProgressType.Info, "Checking for changes" ) )
 				return;
 			var changed = new List<Guid>();
 			foreach( MetaData mdCurrent in md.Contents )
@@ -126,7 +126,7 @@
 
 				// Did it change from what we last knew about it?
 				MetaData mdLastKnown = ReadServerMetadata( id );
-				if( mdLastKnown.ModifiedDate != mdCurrent.ModifiedDate )
+				if( mdLastKnown.UTCDateModified != mdCurrent.UTCDateModified )
 				{
 					changed.Add( id );
 					continue;
@@ -179,18 +179,22 @@
 			}
 			catch( Exception ex )
 			{
-				progress( ProgressType.Error, ex.Message );
+				progress( ProgressType.Error, string.Format(
+					"Error loading entry {0}: {1}", entryId, ex.Message ) );
 			}
 		}
 
 		private void PushToServer( SyncProgressDelegate progress, Guid entryId )
 		{
+			progress( ProgressType.Complete, "Uploading..." );
+
 			MetaData mdLastKnown = ReadServerMetadata( entryId );
 
 			byte[] rawData;
 			DateTime lastWrite;
 			JournalEntry.GetCleanBytes( GetLocalEntryFilePath( entryId ), out rawData, out lastWrite );
 
+			// Upload the data to Dropbox.
 			var result = this.RawClient.UploadFile(
 				m_rootPath, JournalEntry.GetDataFileName( entryId ), rawData,
 				overwrite: true, parentRevision: mdLastKnown.Rev );
@@ -200,6 +204,7 @@
 				return;
 			}
 
+			// Remember that we pushed this version, and the server metadata which matches it.
 			WriteLocalSyncInfo( entryId, new LocalSyncInfo { LastUploadedVersion = lastWrite } );
 			WriteServerMetadata( entryId, result.Data );
 

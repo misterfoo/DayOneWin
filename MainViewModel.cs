@@ -223,14 +223,12 @@
 
 				SetMainStatus( "Saving..." );
 
-				if( m_offlineMode )
+				foreach( JournalEntry entry in dirtyList )
+					entry.Save( App.OfflineEntryStore );
+				if( !m_offlineMode )
 				{
 					foreach( JournalEntry entry in dirtyList )
-						entry.Save( App.OfflineEntryStore );
-				}
-				else
-				{
-					throw new NotImplementedException();
+						m_dropbox.PushToServerAsync( DropboxServerProgress, entry.Uuid );
 				}
 
 				NavInfoStringChanged();
@@ -253,27 +251,16 @@
 		{
 			if( m_offlineMode )
 			{
-				this.AllEntries = new List<JournalEntry>();
-
-				// Load old entries off disk.
-				List<JournalEntry> entries = new List<JournalEntry>();
-				foreach( string entry in Directory.EnumerateFiles( App.OfflineEntryStore,
-					"*" + JournalEntry.StandardFileExtension ) )
-				{
-					entries.Add( JournalEntry.Load( entry ) );
-				}
-
+				var entries = JournalEntry.LoadAllCachedEntries().ToList();
 				if( entries.Count == 0 )
 					entries.Add( JournalEntry.SampleEntry );
-
 				FinishLoadEntries( entries );
 			}
 			else
 			{
 				SetMainStatus( "Loading entries..." );
-				m_dropbox.RawClient.GetMetaDataAsync( this.DropboxRootPath,
-					response => LoadEntries( response.Contents ),
-					error => SetMainStatus( error.ToString() ) );
+				m_dropbox.RefreshFromServerAsync( DropboxServerProgress )
+					.ContinueWith( _ => RefreshComplete() );
 			}
 		}
 
@@ -321,54 +308,29 @@
 			MoveTo( this.AllEntries.Count - 1 );
 		}
 
-		private void LoadEntries( List<DropNet.Models.MetaData> dirContents )
+		private void RefreshComplete()
 		{
-			if( dirContents.Count == 0 )
+			SetDropboxStatus();
+			SetMainStatus( "Loading..." );
+
+			var entries = JournalEntry.LoadAllCachedEntries().ToList();
+			if( entries.Count == 0 )
 			{
 				NotifyError( "No journal entries", "Couldn't find any journal entries," +
 					" because none exist or the Dropbox storage path is wrong." );
 				return;
 			}
 
-			var entries = dirContents.Where( x => !x.Is_Dir ).ToList();
-			if( entries.Count == 0 )
-				return;
-			var latest = entries.OrderByDescending( x => x.ModifiedDate ).First();
-			LoadEntry( latest );
-			SetMainStatus( "Loaded!" );
-		}
-
-		private void LoadEntry( DropNet.Models.MetaData md )
-		{
-			m_dropbox.RawClient.GetFileAsync( md.Path,
-				response => FinishLoadEntry( md, response ),
-				error => NotifyError( "Error loading entry", error.Message ) );
+			FinishLoadEntries( entries );
+			SetMainStatus();
 		}
 
 		private void FinishLoadEntries( List<JournalEntry> entries )
 		{
+			this.AllEntries.Clear();
 			foreach( JournalEntry e in entries.OrderBy( x => x.CreatedOn ) )
 				this.AllEntries.Add( e );
 			this.ActiveEntry = this.AllEntries.Last();
-		}
-
-		private void FinishLoadEntry( MetaData lastKnownMetadata, RestSharp.IRestResponse loaded )
-		{
-			try
-			{
-				var mdRaw = loaded.Headers.FirstOrDefault( x => x.Name == "x-dropbox-metadata" );
-				MetaData md = (mdRaw != null) ?
-					JsonConvert.DeserializeObject<MetaData>( (string)mdRaw.Value ) :
-					lastKnownMetadata;
-
-				JournalEntry entry = JournalEntry.Load( loaded.RawBytes );
-				this.ActiveEntry = entry;
-			}
-			catch( Exception ex )
-			{
-				this.ActiveEntry = null;
-				NotifyError( "Error loading journal entry", ex.Message );
-			}
 		}
 
 		private void MoveTo( int index )
@@ -383,6 +345,20 @@
 		private void NavInfoStringChanged()
 		{
 			OnPropertyChanged( "NavigationInfoString" );
+		}
+
+		private bool DropboxServerProgress( Dropbox.ProgressType type, string message, int stepNum, int stepCount )
+		{
+			if( type == Dropbox.ProgressType.Error )
+			{
+				NotifyError( "Error talking to Dropbox", message );
+				return false;
+			}
+
+			if( stepCount != 0 )
+				message += string.Format( " ({0} of {1})", stepNum, stepCount );
+			SetDropboxStatus( message );
+			return true;
 		}
 
 		/// <summary>
@@ -415,11 +391,11 @@
 			this.MainStatusMessage = msg ?? string.Empty;
 		}
 
-		private void SetDropboxStatus( string msg )
+		private void SetDropboxStatus( string msg = null )
 		{
 			if( !string.IsNullOrEmpty( msg ) )
 				msg = "Dropbox: " + msg;
-			this.DropboxStatusMessage = msg;
+			this.DropboxStatusMessage = msg ?? string.Empty;
 		}
 
 		/// <summary>
