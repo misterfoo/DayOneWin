@@ -1,5 +1,6 @@
 ﻿namespace DayOneWin
 {
+	using System;
 	using System.ComponentModel;
 	using System.Runtime.CompilerServices;
 
@@ -18,6 +19,11 @@
 		/// SetProperty is called, and must be cleared by the derived class or external client.
 		/// </summary>
 		public bool IsDirty { get; set; }
+
+		/// <summary>
+		/// The timestamp of the last change to this object (the last change to a tracked property)
+		/// </summary>
+		public DateTimeOffset LastChangeTime { get; set; }
 
 		/// <summary>
 		/// Checks if a property already matches a desired value. Sets the property and notifies
@@ -40,6 +46,7 @@
 
 			storage = value;
 			this.IsDirty = true;
+			this.LastChangeTime = DateTimeOffset.UtcNow;
 			this.OnPropertyChanged( propertyName );
 			return true;
 		}

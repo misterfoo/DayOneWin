@@ -22,7 +22,7 @@
 			this.DataContext = m_model;
 			m_model.LogOut();
 
-			TimeSpan saveInterval = TimeSpan.FromSeconds( 5 );
+			TimeSpan saveInterval = TimeSpan.FromSeconds( 1 );
 			m_saveTimer = new Timer( SaveTimer, null, saveInterval, saveInterval );
 		}
 

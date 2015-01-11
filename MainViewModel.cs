@@ -17,6 +17,11 @@
 	/// </summary>
 	class MainViewModel : BindableBase
 	{
+		static MainViewModel()
+		{
+			AutoSaveIdleTime = TimeSpan.FromSeconds( 3 );
+		}
+
 		public MainViewModel( Window view )
 		{
 			SetMainStatus( string.Empty );
@@ -203,7 +208,14 @@
 		}
 
 		/// <summary>
-		/// Saves changes to any edited journal entries.
+		/// The amount of time to wait before automatically saving the active entry; changes
+		/// to the active entry will not be saved until it has been unchanged for this amount
+		/// of time.
+		/// </summary>
+		public static TimeSpan AutoSaveIdleTime { get; set; }
+
+		/// <summary>
+		/// Saves changes to edited journal entries.
 		/// </summary>
 		public void AutoSave()
 		{
@@ -217,7 +229,7 @@
 				// Find all the entries which need saving.
 				JournalEntry[] dirtyList;
 				lock( this.AllEntries )
-					dirtyList = this.AllEntries.Where( x => x.IsDirty ).ToArray();
+					dirtyList = this.AllEntries.Where( ShouldAutoSaveEntry ).ToArray();
 				if( dirtyList.Length == 0 )
 					return;
 
@@ -376,6 +388,22 @@
 					Application.Current.Dispatcher.BeginInvoke( new Action( wb.Dispose ) );
 				};
 			wb.Navigate( "https://www.dropbox.com/logout" );
+		}
+
+		private bool ShouldAutoSaveEntry( JournalEntry entry )
+		{
+			if( !entry.IsDirty )
+				return false;
+
+			if( entry == this.ActiveEntry )
+			{
+				var timeSinceEdit = DateTimeOffset.UtcNow - entry.LastChangeTime;
+				return (timeSinceEdit > AutoSaveIdleTime);
+			}
+			else
+			{
+				return true;
+			}
 		}
 
 		private void NotifyError( string summary, string details )
