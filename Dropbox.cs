@@ -188,7 +188,9 @@
 		{
 			progress( ProgressType.Complete, "Uploading..." );
 
+			// Read the last known metadata - this will be null for new entries.
 			MetaData mdLastKnown = ReadServerMetadata( entryId );
+			string parentRev = (mdLastKnown != null) ? mdLastKnown.Rev : null;
 
 			byte[] rawData;
 			DateTime lastWrite;
@@ -197,7 +199,7 @@
 			// Upload the data to Dropbox.
 			var result = this.RawClient.UploadFile(
 				m_rootPath, JournalEntry.GetDataFileName( entryId ), rawData,
-				overwrite: true, parentRevision: mdLastKnown.Rev );
+				overwrite: true, parentRevision: parentRev );
 			if( result.StatusCode != HttpStatusCode.OK )
 			{
 				ReportError( progress, "Upload failed", result );
