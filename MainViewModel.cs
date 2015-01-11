@@ -27,8 +27,7 @@
 			this.MainStatus = new StatusInfoViewModel();
 			this.DropboxStatus = new StatusInfoViewModel( "Dropbox: " );
 
-//			this.DropboxRootPath = "/Apps/Day One/Journal.dayone/entries";
-			this.DropboxRootPath = "/Scratch/JournalEntries";
+			this.DropboxRootPath = "/Apps/Day One/Journal.dayone/entries";
 			this.AllEntries = new List<JournalEntry>();
 
 			m_offlineMode = false;
