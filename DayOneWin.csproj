@@ -69,6 +69,7 @@
     <Compile Include="Converters.cs" />
     <Compile Include="MainViewModel.cs" />
     <Compile Include="PropertyList.cs" />
+    <Compile Include="StatusInfoViewModel.cs" />
     <Page Include="LoginWindow.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>

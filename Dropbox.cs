@@ -143,6 +143,8 @@
 					return;
 				PullFromServer( progress, id );
 			}
+
+			progress( ProgressType.Info, "Sync complete" );
 		}
 
 		private void PullFromServer( SyncProgressDelegate progress, Guid entryId )

@@ -22,13 +22,13 @@
 			this.DataContext = m_model;
 			m_model.LogOut();
 
-			TimeSpan saveInterval = TimeSpan.FromSeconds( 1 );
-			m_saveTimer = new Timer( SaveTimer, null, saveInterval, saveInterval );
+			TimeSpan interval = TimeSpan.FromSeconds( 1 );
+			m_backgroundTimer = new Timer( BackgroundTimer, null, interval, interval );
 		}
 
 		private static string LoginButtonText;
 		private MainViewModel m_model;
-		private Timer m_saveTimer;
+		private Timer m_backgroundTimer;
 
 		private void Window_Closing( object sender, System.ComponentModel.CancelEventArgs e )
 		{
@@ -122,10 +122,10 @@
 			return false;
 		}
 
-		private void SaveTimer( object state )
+		private void BackgroundTimer( object state )
 		{
 			this.Dispatcher.Invoke( CommitEdits );
-			m_model.AutoSave();
+			m_model.DoBackgroundWork();
 		}
 
 		private void model_ErrorOccurred( object sender, string error )

@@ -18,13 +18,13 @@
                    BorderBrush="DarkGray">
             <StatusBarItem>
                 <Label Name="LabelMainStatus"
-                   Content="{Binding MainStatusMessage}"
+                   Content="{Binding MainStatus.Status}"
                    VerticalAlignment="Center"
                    />
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <Label Name="LabelDropboxStatus"
-                   Content="{Binding DropboxStatusMessage}"
+                   Content="{Binding DropboxStatus.Status}"
                    VerticalAlignment="Center"
                    />
             </StatusBarItem>

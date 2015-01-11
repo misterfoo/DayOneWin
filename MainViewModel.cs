@@ -24,7 +24,9 @@
 
 		public MainViewModel( Window view )
 		{
-			SetMainStatus( string.Empty );
+			this.MainStatus = new StatusInfoViewModel();
+			this.DropboxStatus = new StatusInfoViewModel( "Dropbox: " );
+
 //			this.DropboxRootPath = "/Apps/Day One/Journal.dayone/entries";
 			this.DropboxRootPath = "/Scratch/JournalEntries";
 			this.AllEntries = new List<JournalEntry>();
@@ -134,24 +136,21 @@
 		}
 
 		/// <summary>
-		/// The main status bar message.
+		/// The amount of time to wait before automatically saving the active entry; changes
+		/// to the active entry will not be saved until it has been unchanged for this amount
+		/// of time.
 		/// </summary>
-		public string MainStatusMessage
-		{
-			get { return m_mainStatus; }
-			set { SetProperty( ref m_mainStatus, value ); }
-		}
-		private string m_mainStatus;
+		public static TimeSpan AutoSaveIdleTime { get; set; }
 
 		/// <summary>
-		/// The Dropbox status bar message.
+		/// The main app status.
 		/// </summary>
-		public string DropboxStatusMessage
-		{
-			get { return m_dropboxStatus; }
-			set { SetProperty( ref m_dropboxStatus, value ); }
-		}
-		private string m_dropboxStatus;
+		public StatusInfoViewModel MainStatus { get; private set; }
+
+		/// <summary>
+		/// The Dropbox connection status.
+		/// </summary>
+		public StatusInfoViewModel DropboxStatus { get; private set; }
 
 		/// <summary>
 		/// Raised when a substantial error occurs that the user should probably know about.
@@ -178,7 +177,7 @@
 					return;
 				}
 
-				SetDropboxStatus( "Connected" );
+				this.DropboxStatus.Set( "Connected" );
 				SetConnection( Dropbox.Connect( window.UserToken, this.DropboxRootPath ) );
 			}
 
@@ -195,7 +194,7 @@
 				var result = m_dropbox.RawClient.DisableAccessToken();
 				if( result.StatusCode != System.Net.HttpStatusCode.OK )
 				{
-					SetMainStatus( result.ToString() );
+					this.MainStatus.Set( result.ToString() );
 					return;
 				}
 
@@ -208,53 +207,14 @@
 		}
 
 		/// <summary>
-		/// The amount of time to wait before automatically saving the active entry; changes
-		/// to the active entry will not be saved until it has been unchanged for this amount
-		/// of time.
+		/// Performs background work such as saving dirty journal entries.
 		/// </summary>
-		public static TimeSpan AutoSaveIdleTime { get; set; }
-
-		/// <summary>
-		/// Saves changes to edited journal entries.
-		/// </summary>
-		public void AutoSave()
+		public void DoBackgroundWork()
 		{
-			if( !this.IsConnected || m_saving )
-				return;
-
-			try
-			{
-				m_saving = true;
-
-				// Find all the entries which need saving.
-				JournalEntry[] dirtyList;
-				lock( this.AllEntries )
-					dirtyList = this.AllEntries.Where( ShouldAutoSaveEntry ).ToArray();
-				if( dirtyList.Length == 0 )
-					return;
-
-				SetMainStatus( "Saving..." );
-
-				foreach( JournalEntry entry in dirtyList )
-					entry.Save( App.OfflineEntryStore );
-				if( !m_offlineMode )
-				{
-					foreach( JournalEntry entry in dirtyList )
-						m_dropbox.PushToServerAsync( DropboxServerProgress, entry.Uuid );
-				}
-
-				NavInfoStringChanged();
-
-				// A short delay so the user can see the "saving..." status.
-				System.Threading.Thread.Sleep( TimeSpan.FromMilliseconds( 250 ) );
-				SetMainStatus( "Saved." );
-			}
-			finally
-			{
-				m_saving = false;
-			}
+			AutoSave();
+			this.MainStatus.MaybeExpire();
+			this.DropboxStatus.MaybeExpire();
 		}
-		private bool m_saving;
 
 		/// <summary>
 		/// Starts an asynchronous load of the journal entryId list.
@@ -270,7 +230,7 @@
 			}
 			else
 			{
-				SetMainStatus( "Loading entries..." );
+				this.MainStatus.SetSticky( "Loading entries..." );
 				m_dropbox.RefreshFromServerAsync( DropboxServerProgress )
 					.ContinueWith( _ => RefreshComplete() );
 			}
@@ -322,8 +282,7 @@
 
 		private void RefreshComplete()
 		{
-			SetDropboxStatus();
-			SetMainStatus( "Loading..." );
+			this.MainStatus.SetSticky( "Loading..." );
 
 			var entries = JournalEntry.LoadAllCachedEntries().ToList();
 			if( entries.Count == 0 )
@@ -334,7 +293,7 @@
 			}
 
 			FinishLoadEntries( entries );
-			SetMainStatus();
+			this.MainStatus.Clear();
 		}
 
 		private void FinishLoadEntries( List<JournalEntry> entries )
@@ -343,6 +302,61 @@
 			foreach( JournalEntry e in entries.OrderBy( x => x.CreatedOn ) )
 				this.AllEntries.Add( e );
 			this.ActiveEntry = this.AllEntries.Last();
+		}
+
+		private void AutoSave()
+		{
+			if( !this.IsConnected || m_saving )
+				return;
+
+			try
+			{
+				m_saving = true;
+
+				// Find all the entries which need saving.
+				JournalEntry[] dirtyList;
+				lock( this.AllEntries )
+					dirtyList = this.AllEntries.Where( ShouldAutoSaveEntry ).ToArray();
+				if( dirtyList.Length == 0 )
+					return;
+
+				this.MainStatus.SetSticky( "Saving..." );
+
+				foreach( JournalEntry entry in dirtyList )
+					entry.Save( App.OfflineEntryStore );
+				if( !m_offlineMode )
+				{
+					foreach( JournalEntry entry in dirtyList )
+						m_dropbox.PushToServerAsync( DropboxServerProgress, entry.Uuid );
+				}
+
+				NavInfoStringChanged();
+
+				// A short delay so the user can see the "saving..." status.
+				System.Threading.Thread.Sleep( TimeSpan.FromMilliseconds( 250 ) );
+				this.MainStatus.Set( "Saved." );
+			}
+			finally
+			{
+				m_saving = false;
+			}
+		}
+		private bool m_saving;
+
+		private bool ShouldAutoSaveEntry( JournalEntry entry )
+		{
+			if( !entry.IsDirty )
+				return false;
+
+			if( entry == this.ActiveEntry )
+			{
+				var timeSinceEdit = DateTimeOffset.UtcNow - entry.LastChangeTime;
+				return (timeSinceEdit > AutoSaveIdleTime);
+			}
+			else
+			{
+				return true;
+			}
 		}
 
 		private void MoveTo( int index )
@@ -369,7 +383,7 @@
 
 			if( stepCount != 0 )
 				message += string.Format( " ({0} of {1})", stepNum, stepCount );
-			SetDropboxStatus( message );
+			this.DropboxStatus.Set( message );
 			return true;
 		}
 
@@ -378,52 +392,24 @@
 		/// </summary>
 		private void DoBrowserLogout()
 		{
-			SetMainStatus( "Logging out..." );
+			this.MainStatus.Set( "Logging out..." );
 			var wb = new System.Windows.Controls.WebBrowser();
 			wb.Navigating += ( s, a ) => Debug.WriteLine( "Navigating: " + a.Uri );
 			wb.Navigated += ( s, a ) =>
 				{
-					SetMainStatus();
-					SetDropboxStatus( "Disconnected" );
+					this.MainStatus.Clear();
+					this.DropboxStatus.Set( "Disconnected" );
 					Application.Current.Dispatcher.BeginInvoke( new Action( wb.Dispose ) );
 				};
 			wb.Navigate( "https://www.dropbox.com/logout" );
 		}
 
-		private bool ShouldAutoSaveEntry( JournalEntry entry )
-		{
-			if( !entry.IsDirty )
-				return false;
-
-			if( entry == this.ActiveEntry )
-			{
-				var timeSinceEdit = DateTimeOffset.UtcNow - entry.LastChangeTime;
-				return (timeSinceEdit > AutoSaveIdleTime);
-			}
-			else
-			{
-				return true;
-			}
-		}
-
 		private void NotifyError( string summary, string details )
 		{
-			SetMainStatus( summary );
+			this.MainStatus.SetSticky( summary );
 			var eh = this.ErrorOccurred;
 			if( eh != null )
 				eh( this, summary + ": " + details );
-		}
-
-		private void SetMainStatus( string msg = null )
-		{
-			this.MainStatusMessage = msg ?? string.Empty;
-		}
-
-		private void SetDropboxStatus( string msg = null )
-		{
-			if( !string.IsNullOrEmpty( msg ) )
-				msg = "Dropbox: " + msg;
-			this.DropboxStatusMessage = msg ?? string.Empty;
 		}
 
 		/// <summary>
@@ -433,11 +419,10 @@
 		{
 			get
 			{
-				return new MainViewModel( null )
-				{
-					ActiveEntry = JournalEntry.SampleEntry,
-					MainStatusMessage = "Stuff!"
-				};
+				MainViewModel mvm = new MainViewModel( null );
+				mvm.ActiveEntry = JournalEntry.SampleEntry;
+				mvm.MainStatus.Set( "Stuff!" );
+				return mvm;
 			}
 		}
 	}
